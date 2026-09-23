@@ -11,6 +11,8 @@
 - 固件体积：Flash **17.0 KB**、RAM **1.9 KB**（`text 17400 / data 8 / bss 1920`）
 - 代码规模：`Src/main.c` 3365 行（含大量原理注释）
 
+![实物运行照片](docs/images/hardware-03-run-status.png)
+
 ---
 
 ## 1. 这个项目解决什么问题
@@ -305,6 +307,23 @@ T=31.6C H=45.0% #106 A=1
 | 超限（>30.0 °C 或 >80.0 %） | 断续鸣响（响 200 ms / 停 800 ms） | 4 Hz 快闪 |
 | DHT11 读取失败 | 静默 | 8 Hz 超快闪 |
 
+### 5.6 实物照片
+
+以下三张均为**真机实拍**（非示意图），OLED 上的文字可直接与 5.4 的画面定义对照：
+
+| 上电自检 | 实时读数 | 运行状态 |
+|---|---|---|
+| ![上电自检](docs/images/hardware-01-power-on-selfcheck.png) | ![实时读数](docs/images/hardware-02-live-reading.png) | ![运行状态](docs/images/hardware-03-run-status.png) |
+| `DHT11 Monitor` `v1.2 Ready` `Flash: OK` `Beep:Low-Trg` | `Temp: 27.8°C` `Humi: 58.8%` `Status: Normal` `OK:45 F:0 M2/5` | `Time: 00:02:39` `Uptime: 159s` `Status: Normal` `OK:64 F:0 M2/5` |
+
+三张照片对应三种状态：
+
+- **上电自检**：OLED 报出 `Flash: OK`（W25Q64 的 JEDEC 校验通过）与 `Beep:Low-Trg`（蜂鸣器按低电平触发配置）
+- **实时读数**：滑动平均后的温湿度 + `Status: Normal`；末行 `OK:45 F:0 M2/5` 含义为「成功采样 45 次 / 失败 0 次 / 当前显示画面 2，共 5 个画面」
+- **运行状态**：`Time` 为开机计时，`Uptime` 为最近一次成功采集距今的秒数
+
+整机全部搭在面包板上：STM32F103C8T6 最小系统板、SSD1306 OLED、DHT11、W25Q64、3 针蜂鸣器、ESP-01S 与 CH340 共地供电，**未使用任何外部路由器**——热点由 ESP-01S 自行发出。
+
 ---
 
 ## 6. 项目结构
@@ -312,7 +331,10 @@ T=31.6C H=45.0% #106 A=1
 ```
 温湿度监测仪/
 ├── README.md                     本文件
+├── LICENSE                       MIT 许可证
 ├── STM32F103C8TX_FLASH.ld        链接脚本（Flash/RAM 布局）
+├── docs/
+│   └── images/                   实物照片（见 5.6 节）
 ├── Src/
 │   ├── main.c                    全部应用代码（3365 行，含详细原理注释）
 │   ├── syscalls.c                系统调用桩（newlib 依赖）
