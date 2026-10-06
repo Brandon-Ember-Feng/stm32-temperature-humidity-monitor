@@ -1,4 +1,5 @@
 #include "hist_store.h"
+#include "hist_index.h"
 #include "w25q64.h"
 #include "bsp_time.h"
 /* ==========================================================================
@@ -266,38 +267,21 @@ uint8_t W25_RecAppend(int16_t temp_x10, int16_t humi_x10)
  * 每次扫 2728 条记录，翻一页就得等 150ms —— 手感明显发滞。 */
 uint8_t W25_RecRead(uint32_t idx, int16_t *temp_x10, int16_t *humi_x10)
 {
+    Hist_Index_T ix;
     uint32_t addr;
     uint8_t  raw[W25_REC_SIZE];
 
     if (!g_rec_ok) return 0U;
     if (idx >= g_rec_total) return 0U;
 
-    /* 决定这条记录在哪个扇区、第几条。
-     * 排序依据：扇区头的序号(seq) 大的表示"更新的那一轮"。 */
-    if ((g_cntA > 0U) && (g_cntB > 0U))
-    {
-        uint8_t a_is_newer = (g_recA.seq >= g_recB.seq) ? 1U : 0U;
+    /* 排序 + 寻址的算术在 Drivers/hist_index.c（纯函数，PC 上可单测）。
+     * 这里只负责把驱动内部状态快照成它的入参，再去 Flash 读那 3 个字节。 */
+    ix.cnt_a = g_cntA;
+    ix.cnt_b = g_cntB;
+    ix.seq_a = g_recA.seq;
+    ix.seq_b = g_recB.seq;
 
-        /* 序号小的那个扇区里存的是更早的记录，排在前面 */
-        uint16_t old_cnt = a_is_newer ? g_cntB : g_cntA;
-        uint32_t old_sec = a_is_newer ? W25_SECTOR_B : W25_SECTOR_A;
-
-        if (idx < (uint32_t)old_cnt)
-        {
-            addr = old_sec + W25_REC_HDR_SIZE + idx * W25_REC_SIZE;
-        }
-        else
-        {
-            uint32_t k = idx - old_cnt;
-            uint32_t new_sec = a_is_newer ? W25_SECTOR_A : W25_SECTOR_B;
-            addr = new_sec + W25_REC_HDR_SIZE + k * W25_REC_SIZE;
-        }
-    }
-    else
-    {
-        uint32_t sec = (g_cntA > 0U) ? W25_SECTOR_A : W25_SECTOR_B;
-        addr = sec + W25_REC_HDR_SIZE + idx * W25_REC_SIZE;
-    }
+    if (Hist_Locate(&ix, idx, &addr) == 0U) return 0U;
 
     W25_Read(addr, raw, W25_REC_SIZE);
     *temp_x10 = (int16_t)(((uint16_t)raw[0] << 8) | (uint16_t)raw[1]);

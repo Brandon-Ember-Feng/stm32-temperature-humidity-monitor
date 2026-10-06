@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: layering / cross-build / unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-none-eabi
+
+      # ---- 1. 架构约束：依赖单向 / 寄存器隔离 / 接口收敛 ----
+      - name: Check layering constraints
+        run: python3 tools/check_layering.py
+
+      # ---- 2. 交叉编译固件，并把「零警告」作为硬门槛 ----
+      # 注意 set -o pipefail：否则管道的退出码来自 tee，会掩盖 make 的失败
+      - name: Cross-compile firmware (-Wall -Wextra, zero-warning gate)
+        run: |
+          set -o pipefail
+          make TOOLCHAIN=/usr/bin PYTHON=python3 2>&1 | tee compile.log
+          if grep -qi "warning:" compile.log; then
+            echo "::error::交叉编译出现警告，不满足零警告要求"
+            exit 1
+          fi
+
+      # ---- 3. PC 端单元测试（45 个用例 / 137 条断言）----
+      - name: Run host unit tests
+        run: |
+          set -o pipefail
+          make test PYTHON=python3 2>&1 | tee test.log
+          if grep -qi "warning:" test.log; then
+            echo "::error::测试代码存在编译警告"
+            exit 1
+          fi
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build/*.hex
+            build/*.bin
+            build/*.elf
+          if-no-files-found: error

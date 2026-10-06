@@ -167,6 +167,14 @@ char BSP_Uart2_RxAt(uint16_t idx)
     return (idx < BSP_UART2_RX_BUF) ? g_uart2_rx[idx] : '\0';
 }
 
+/* 只读的缓冲首地址。给"整段扫描关键词"这类操作提供 O(n) 的访问方式 ——
+ * 逐字节调 RxAt 会退化成 O(n²)，而且每次都要过一次函数调用。
+ * 返回 const 指针：调用方只能读，写入仍然只发生在接收中断里。 */
+const char *BSP_Uart2_RxBuf(void)
+{
+    return g_uart2_rx;
+}
+
 uint16_t BSP_Uart2_ScanPos(void)
 {
     return g_uart2_scan;

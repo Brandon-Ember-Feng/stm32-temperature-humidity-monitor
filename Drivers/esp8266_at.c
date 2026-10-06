@@ -1,4 +1,5 @@
 #include "esp8266_at.h"
+#include "esp_parse.h"
 #include "bsp_uart.h"
 #include "bsp_time.h"
 #include "fixed_str.h"
@@ -57,27 +58,17 @@ static char     g_esp_cmd[48];          /* 拼 AT 指令用 */
 /* ---------------- 15.2 关键词查找 ---------------- */
 
 /* 判断缓冲里从 pos 开始是不是给定字符串 */
+/* 下面两个是本驱动对「纯解析函数」的适配层：把 BSP 的接收缓冲喂给
+ * Drivers/esp_parse.c 里的纯函数。这样匹配逻辑能在 PC 上单测，
+ * 而调用点（ESP_TrackLink / ESP_WaitFor / ESP_SendFrame）一行都不用改。 */
 static uint8_t ESP_MatchAt(uint16_t pos, const char *t)
 {
-    uint8_t j = 0U;
-
-    while (t[j] != '\0')
-    {
-        if (BSP_Uart2_RxAt((uint16_t)(pos + j)) != t[j]) return 0U;   /* 缓冲 NUL 结尾，越界读只会读到 '\0' */
-        j++;
-    }
-    return 1U;
+    return ESP_MatchAtIn(BSP_Uart2_RxBuf(), BSP_Uart2_RxLen(), pos, t);
 }
 
 static uint8_t ESP_Has(const char *t)
 {
-    uint16_t i;
-
-    for (i = 0U; i < BSP_Uart2_RxLen(); i++)
-    {
-        if (ESP_MatchAt(i, t)) return 1U;
-    }
-    return 0U;
+    return ESP_FindToken(BSP_Uart2_RxBuf(), BSP_Uart2_RxLen(), t);
 }
 
 /* 解析模块**主动**上报的连接状态：0,CONNECT / 0,CLOSED

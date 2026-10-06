@@ -1,4 +1,5 @@
 #include "dht11.h"
+#include "dht11_frame.h"
 #include "bsp_onewire.h"
 #include "bsp_time.h"
 #include "bsp_cpu.h"
@@ -75,8 +76,8 @@ static uint8_t DHT11_ReadRaw(void)
         }
     }
 
-    /* ④ 校验和：前 4 字节之和的最低 8 位应等于第 5 字节 */
-    if ((uint8_t)(dat[0] + dat[1] + dat[2] + dat[3]) != dat[4])
+    /* ④ 校验和：判据本身在 dht11_frame.c（纯函数，可在 PC 上单测） */
+    if (DHT_CheckSum(dat) == 0U)
     {
         for (i = 0U; i < 5U; i++) g_dht_raw[i] = dat[i];   /* 出错也要把原始数据留下来当证据 */
         g_dht_err = 6U;

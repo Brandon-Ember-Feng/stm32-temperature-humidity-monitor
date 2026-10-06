@@ -3,14 +3,16 @@
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/MCU-STM32F103C8T6-blue.svg)
 ![HAL](https://img.shields.io/badge/HAL-none%20(register%20level)-orange.svg)
+[![CI](https://github.com/Brandon-Ember-Feng/stm32-temperature-humidity-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/Brandon-Ember-Feng/stm32-temperature-humidity-monitor/actions/workflows/ci.yml)
 
 基于 **STM32F103C8T6** 的温湿度监测系统：采集 → 显示 → 存储 → 报警 → 无线推送，全链路打通。
 **纯寄存器裸机开发，不依赖 HAL 库**，所有外设（GPIO / 定时器 / 串口 / SPI / 软件 I2C）均由直接读写寄存器实现。
 
 - 主控：STM32F103C8T6（Cortex-M3），主频 64 MHz
-- 固件体积：Flash **18.0 KB**、RAM **1.9 KB**（`text 18444 / data 16 / bss 1920`）
-- 代码规模：4 层 21 个 `.c` 文件，按 `Core / Drivers / BSP / Util` 分层（见第 6 节）
+- 固件体积：Flash **18.2 KB**、RAM **1.9 KB**（`text 18680 / data 16 / bss 1920`）
+- 代码规模：4 层 25 个 `.c` 文件，按 `Core / Drivers / BSP / Util` 分层（见第 6 节）
 - 构建方式：`make` 一条命令，不依赖 IDE；架构约束在编译前自动校验
+- 质量保障：**45 个单元测试用例 / 137 条断言**（PC 端运行，见 6.3），CI 每次提交自动跑「架构校验 + 交叉编译零警告 + 单元测试」
 
 ![实物运行照片](docs/images/hardware-03-run-status.png)
 
@@ -132,10 +134,17 @@ com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.1
 | 目标 | 作用 |
 |---|---|
 | `make` / `make all` | 编译 + 链接 |
+| `make test` | **PC 端单元测试**（在电脑上编译纯逻辑模块并跑 45 个用例，见 6.3） |
 | `make check-layering` | 单独跑分层架构校验 |
 | `make size` | 打印各段（.text/.rodata/.data/.bss…）占用明细 |
 | `make flash` | 用 `STM32_Programmer_CLI` 烧录（需装 STM32CubeProgrammer） |
 | `make clean` | 删除 `build/` |
+
+> `make test` 需要电脑上有一个宿主 C 编译器。Linux / macOS 自带 `cc`（就是 gcc），直接可用；
+> **Windows 上通常没有 `cc`，用 `zig cc` 代替**（`pip install ziglang`，然后把
+> `site-packages/ziglang` 加进 `PATH`，它里面有 `zig.exe`）。若已装了别的编译器，
+> 也可以 `make test HOSTCC=gcc` 直接指定。
+> **注意这条命令跟 ARM 工具链无关** —— 它在你的电脑上跑，不需要开发板。
 
 产物：
 
@@ -376,14 +385,14 @@ T=31.6C H=45.0% #106 A=1
 
 ## 6. 项目结构
 
-代码按 **`Core → Drivers → BSP → Util`** 四层组织，21 个 `.c` 文件。分层不是为了"好看"，
-而是为了让**上层代码不依赖具体硬件** —— 这是后面能做单元测试、能换芯片的前提（见 6.2）。
+代码按 **`Core → Drivers → BSP → Util`** 四层组织，25 个 `.c` 文件。分层不是为了"好看"，
+而是为了让**上层代码不依赖具体硬件** —— 这是后面能做单元测试、能换芯片的前提（见 6.2、6.3）。
 
 ```
 温湿度监测仪/
 ├── README.md                     本文件
 ├── LICENSE                       MIT 许可证
-├── Makefile                      命令行构建（all / size / flash / check-layering / clean）
+├── Makefile                      命令行构建（all / test / size / flash / check-layering / clean）
 ├── STM32F103C8TX_FLASH.ld        链接脚本（Flash/RAM 布局）
 ├── .cproject / .project          STM32CubeIDE 工程（已指向四层目录，导入即可编译）
 │
@@ -393,12 +402,15 @@ T=31.6C H=45.0% #106 A=1
 │   ├── ui_pages.c / ui_pages.h   五个 OLED 画面 + 按键切换
 │   └── syscalls.c / sysmem.c     newlib 桩函数
 ├── Drivers/                 ★ 第 3 层  器件驱动，只依赖 BSP 提供的物理层
-│   ├── dht11.c / .h              DHT11 单总线协议、位解码、校验和
+│   ├── dht11.c / .h              DHT11 单总线协议、位解码（时序在 BSP/bsp_onewire.c）
+│   ├── dht11_frame.c / .h        ① 纯逻辑：帧校验和、温湿度换算（可在 PC 上单测）
 │   ├── ssd1306.c / .h            OLED 控制器指令与显存写入
 │   ├── font8x16.c / .h           8×16 点阵字库
 │   ├── w25q64.c / .h             SPI Flash 指令集
-│   ├── hist_store.c / .h         历史记录：双扇区乒乓 + 顺序追加 + 索引换算
-│   ├── esp8266_at.c / .h         AT 指令序列、应答解析、断线重连
+│   ├── hist_store.c / .h         历史记录：双扇区乒乓 + 顺序追加
+│   ├── hist_index.c / .h         ② 纯逻辑：逻辑序号 → Flash 地址换算（可在 PC 上单测）
+│   ├── esp8266_at.c / .h         AT 指令序列、断线重连
+│   ├── esp_parse.c / .h          ③ 纯逻辑：AT 应答关键词匹配（可在 PC 上单测）
 │   ├── key.c / .h                按键扫描：消抖 + 长短按
 │   └── beep.c / .h               蜂鸣器
 ├── BSP/                     ★ 第 2 层  板级支持包，全工程唯一允许读写寄存器的地方
@@ -415,13 +427,30 @@ T=31.6C H=45.0% #106 A=1
 │   ├── fixed_str.c / .h          定点格式化（不用 sprintf，省 Flash）
 │   └── filter.c / .h             滑动平均滤波器
 │
+├── test/                          PC 端单元测试（在电脑上跑，不需要开发板）
+│   ├── framework.h                ~100 行自写断言框架（不引第三方依赖）
+│   ├── host_test_main.c           框架实现 + main()，汇总 5 个 suite 的结果
+│   ├── suites.h                   5 个 suite 的入口声明
+│   ├── test_filter.c              滑动平均：8 个用例
+│   ├── test_fixed_str.c           定点格式化：9 个用例
+│   ├── test_dht11_frame.c         DHT11 帧解析：9 个用例（含负温、校验和边界）
+│   ├── test_hist_index.c          历史地址换算：8 个用例（含双扇区满、越界）
+│   ├── test_esp_parse.c           AT 应答匹配：11 个用例（含不越界读）
+│   └── test_plan.md               ★ 测试计划：范围 / 45 项用例 / 未覆盖部分 / 有效性验证
+│
 ├── Startup/
 │   └── startup_stm32f103c8tx.s   启动文件（向量表 + 复位入口）
 ├── tools/
 │   └── check_layering.py         分层架构自动校验（三条硬性约束）
+├── .github/workflows/
+│   └── ci.yml                    CI：架构校验 + 交叉编译零警告 + 单元测试
 └── docs/
     └── images/                   实物照片（见 5.6 节）
 ```
+
+> 带 ①②③ 标注的三个文件是**为了可测试性从既有代码里剥离出来的纯逻辑单元** ——
+> 内容不是新写的，只是把原本混在硬件流程里的位运算/算术搬到了独立文件，
+> 这样它们就能脱离硬件在 PC 上编译、被断言覆盖。详见 6.3。
 
 ### 6.1 模块与原章节的对应关系
 
@@ -446,6 +475,7 @@ T=31.6C H=45.0% #106 A=1
 | 15 | ESP-01S 驱动（AT 指令） | `Drivers/esp8266_at.c`（收发在 `BSP/bsp_uart.c`） |
 | 16 | 主函数与状态机 | `Core/main.c`、`Core/app.c` |
 | — | 定点格式化、滑动平均（原散在各处） | `Util/fixed_str.c`、`Util/filter.c` |
+| — | 帧解析 / 地址换算 / 应答匹配（原混在硬件流程里，为可测试性剥离） | `Drivers/dht11_frame.c`、`hist_index.c`、`esp_parse.c` |
 
 > 重构的等价性做过工具校验：把访问函数按语义反向还原后逐函数比对，
 > **106 个函数与重构前逐字一致**，仅 5 个函数因"接口收口"被有意改写，新增 17 个访问接口。
@@ -463,7 +493,7 @@ T=31.6C H=45.0% #106 A=1
 ```bash
 $ make check-layering
 ======================================================================
-分层架构校验   共检查 43 个文件
+分层架构校验   共检查 49 个文件
 ======================================================================
   规则1 依赖单向   Core -> Drivers -> BSP -> Util   ✔
   规则2 寄存器隔离 寄存器访问仅存在于 BSP/ 层        ✔
@@ -480,6 +510,88 @@ $ make check-layering
 > 上层只能通过 `W25_IsOk()` / `DHT_OkCount()` 读结论 —— 驱动内部怎么记账，
 > 上层既不需要知道，也没有能力改坏。
 
+### 6.3 PC 端单元测试（`make test`）
+
+嵌入式项目常见的困境是"每一行代码都要烧到板子上才知道对不对"。这个工程把
+**不依赖硬件的逻辑抽出来，在电脑上直接编译运行**，一条命令就能验证：
+
+```bash
+$ make test
+>> 编译 PC 端单元测试（宿主编译器：zig cc）
+...
+  ok    test_filter_partial_window_uses_actual_count
+  ok    test_frame_negative_one_degree
+  ok    test_locate_both_sectors_full
+  ok    test_never_reads_past_length
+  ...
+==================================================
+cases : 45 run, 0 failed
+checks: 137 run, 0 failed
+RESULT: PASS
+==================================================
+```
+
+45 个用例、137 条断言，全部在 PC 上运行，**不需要开发板、不需要 ARM 工具链**。
+
+#### 测什么 / 为什么不测别的
+
+| 被测模块 | 覆盖内容 | 用例 |
+|---|---|---|
+| `Util/filter.c` | 滑动平均：窗口未满、除零边界、负值取整方向 | 8 |
+| `Util/fixed_str.c` | 定点格式化：零值、负值、宽度/对齐、缓冲区截断 | 9 |
+| `Drivers/dht11_frame.c` | 帧校验和、正负温换算、湿度换算、全零帧 | 9 |
+| `Drivers/hist_index.c` | 逻辑序号 → Flash 地址：双扇区满、越界、掉电后序号不等 | 8 |
+| `Drivers/esp_parse.c` | AT 应答关键词匹配：跨批次、部分匹配、不越界读 | 11 |
+
+选这 5 个模块的标准只有一条：**"它能不能在 PC 上跑"**。剩下的（总线时序、中断、OLED 排版）
+必须依赖真实硬件或精确时序，塞进单测只会得到一堆"因为环境不对而失败"的假信号 ——
+它们的验证方式在 [`test/test_plan.md`](test/test_plan.md) 的 §4 里逐条列出了。
+
+#### 三处纯逻辑剥离（可测试性的来源）
+
+`Util/` 那两个文件本来就是纯算法；另外三个原本**混在硬件流程里**，
+这次把其中的位运算/算术搬到了独立文件（**逻辑一行没改，只是换了位置**）：
+
+| 原位置 | 剥离出的内容 | 现在的位置 |
+|---|---|---|
+| `dht11.c` 校验和判定 + `Core/app.c` 温湿度换算 | 40 位帧 → 温湿度整数（含负温、×10 定点） | `Drivers/dht11_frame.c` |
+| `hist_store.c` 的 `W25_RecRead` 排序寻址 | 逻辑序号 → Flash 绝对地址（双扇区乒乓的地址推算） | `Drivers/hist_index.c` |
+| `esp8266_at.c` 的 `static ESP_MatchAt` / `ESP_Has` | AT 应答关键词匹配（改成显式 `(buf, len)`，不依赖 `'\0'`） | `Drivers/esp_parse.c` |
+
+> 边界处理是这次剥离的重点：原 `ESP_Has` 依赖缓冲区末尾的 `'\0'`，
+> 但 USART2 是定长缓冲、可能刚好被填满而没有结束符。新接口把长度显式传进去，
+> 并专门写了一条**用不含 `'\0'` 的定长数组**去撞它的用例。
+
+#### 用构建配置再守一遍分层
+
+```make
+# Makefile
+TEST_CFLAGS := -std=c11 -Wall -Wextra -O1 -g -IUtil -IDrivers -I$(TEST_DIR)
+```
+
+注意**只给 `-IUtil -IDrivers`，不给 `-IBSP`**。如果被测代码哪天偷偷 `#include "bsp_gpio.h"`，
+这里会**立刻编译失败** —— 等于用构建配置第 3 次守住了分层边界，不需要额外检查规则。
+
+#### 测试本身可靠吗（有效性验证）
+
+"测试全绿"有可能是因为断言写得恒真。为此做了一次**反向验证**：
+故意给 `Filter_Avg` 注入一个 bug（无论窗口是否填满都固定除以 `FILTER_N`），
+重新运行 —— **4 个用例立刻失败、退出码 1**；改回正确实现后恢复全绿。
+这说明断言确实能区分对错实现，而不是在骗自己。
+
+#### CI 自动跑
+
+`.github/workflows/ci.yml` 在每次 push / PR 时自动执行三步，任一失败即红：
+
+| 步骤 | 门槛 |
+|---|---|
+| `python3 tools/check_layering.py` | 三条分层约束全部通过 |
+| `make TOOLCHAIN=/usr/bin` | 交叉编译成功，**且 `-Wall -Wextra` 零警告**（`grep "warning:"` 命中即失败） |
+| `make test` | 45 个用例全部通过，**且测试代码零编译警告** |
+
+之所以把"零警告"也做成硬门槛，是因为嵌入式里的警告往往就是真 bug
+（未初始化变量、隐式类型截断、有符号/无符号比较）。
+
 ---
 
 ## 7. 几个值得说明的技术决策
@@ -490,6 +602,7 @@ $ make check-layering
 |---|---|---|
 | **不用 HAL，直接写寄存器** | 每一行都对应参考手册的一个 bit，能看清外设真实工作方式 | 换芯片要重写 BSP 层；没有 HAL 提供的容错 |
 | **代码分四层，寄存器只在 BSP** | 上层不含硬件细节，逻辑能在 PC 上编译并做单元测试；换芯片只改 BSP | 多了一层函数跳转（实测约 +1 KB Flash），写起来比"一个文件写完"啰嗦 |
+| **把可测逻辑剥离成独立文件，再上 PC 单元测试** | 硬件的正确性只能靠实机验证，但**算法的正确性可以靠断言**。两者分开后，改一行换算逻辑不必烧板子就能知道对错 | 新增 3 个文件与一次数据拷贝（实测 +236 B Flash）；"什么该剥离"没有机械标准，依赖判断 |
 | **用 HSI 内部时钟而非外部晶振** | 不依赖外部晶振是否起振，程序更"皮实" | 精度约 ±1%，不适合长时间计时（本项目只做相对计时，够用） |
 | **时基用 TIM2 硬件中断，不用延时累加** | 软件延时的每次调用都有指令开销，累加一万次误差明显 | 占用一个定时器；中断里必须保持极短，否则影响单总线时序 |
 | **Flash 用双扇区乒乓写入** | Flash 只能把 1 写成 0，改写前必须整扇区擦除。两扇区轮流用，寿命消耗极慢 | 有效容量减半，逻辑复杂度上升（要处理掉电、对账、跨扇区翻转） |
@@ -531,6 +644,8 @@ $ make check-layering
 | 蜂鸣器一直长鸣 | 触发极性配反，把 `BEEP_ACTIVE_HIGH` 改为 `1` |
 | 按键卡在历史画面出不来 | 该画面短按是翻页，需**长按 1 秒**返回 |
 | `make` 报"架构违规" | 在 `Drivers/` 或 `Core/` 里直接写了寄存器，或加了非 `static` 全局变量；按脚本输出的 `文件:行号` 改 |
+| `make test` 报"未找到宿主编译器" | Windows 上没装 gcc。装 `ziglang` 后把 `site-packages/ziglang` 加进 `PATH`，或 `make test HOSTCC=你的编译器` |
+| `make test` 编译报找不到 `bsp_xxx.h` | 被测代码偷偷依赖了硬件头。这正是 `TEST_CFLAGS` 不给 `-IBSP` 要拦的情况，应把该逻辑剥离成纯函数 |
 | 编译报 `undefined reference to g_xxx` | 说明有模块直接引用了别的模块的内部变量 —— 应改为调用该模块 `.h` 里的访问函数 |
 
 ---
@@ -541,9 +656,11 @@ $ make check-layering
 |---|---|
 | 主控 | STM32F103C8T6，64 MHz |
 | 编译器 | arm-none-eabi-gcc 14.3（`-Wall -Wextra` 零警告） |
-| 固件体积 | `text 18444 / data 16 / bss 1920`（Flash 18.0 KB / RAM 1.9 KB） |
+| 固件体积 | `text 18680 / data 16 / bss 1920`（Flash 18.2 KB / RAM 1.9 KB） |
 | 分层等价性校验 | 106 个函数与重构前逐字一致；5 处有意改写；新增 17 个访问接口 |
-| 架构约束校验 | `make check-layering`：43 个文件，3 条规则全部通过 |
+| 架构约束校验 | `make check-layering`：49 个文件，3 条规则全部通过 |
+| PC 端单元测试 | `make test`：45 个用例 / 137 条断言，全部通过、零编译警告 |
+| 宿主编译器 | Windows 用 `zig cc`（zig 0.13.0）；Linux / CI 用 gcc（`cc`） |
 | ESP-01S 固件 | AT 1.1.0.0（May 11 2016）/ SDK 1.5.4，波特率 115200 |
 | OLED | SSD1306，I2C 地址 `0x78` |
 | Flash | W25Q64，`JEDEC = 0xEF4017` |

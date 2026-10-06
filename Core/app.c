@@ -1,6 +1,7 @@
 #include "app.h"
 #include "filter.h"
 #include "dht11.h"
+#include "dht11_frame.h"
 #include "bsp_uart.h"
 #include "fixed_str.h"
 static Filter_T s_temp_filt;     /* 温度滑动平均器 */
@@ -21,19 +22,15 @@ void App_Init(void)
 }
 void DHT_Process(void)
 {
-    /* 湿度 = 整数部分 ×10 + 小数部分（DHT11 小数位通常为 0，
-     * 这样写能兼容别的型号） */
-    g_humi_now = (int16_t)((int16_t)DHT_RawByte(0U) * 10 + (int16_t)DHT_RawByte(1U));
+    uint8_t raw[DHT_FRAME_LEN];
+    uint8_t i;
 
-    /* 温度：DHT11 规定「温度整数」字节的最高位为 1 时表示零下温度 */
-    if ((DHT_RawByte(2U) & 0x80U) != 0U)
-    {
-        g_temp_now = (int16_t)(-((int16_t)(DHT_RawByte(2U) & 0x7FU) * 10 + (int16_t)DHT_RawByte(3U)));
-    }
-    else
-    {
-        g_temp_now = (int16_t)((int16_t)DHT_RawByte(2U) * 10 + (int16_t)DHT_RawByte(3U));
-    }
+    /* 先把驱动里的 5 个原始字节取出来，再交给纯函数解码。
+     * 解码规则在 Drivers/dht11_frame.c，那边能在 PC 上喂已知帧做测试。 */
+    for (i = 0U; i < DHT_FRAME_LEN; i++) raw[i] = DHT_RawByte(i);
+
+    g_temp_now = DHT_DecodeTemp(raw);
+    g_humi_now = DHT_DecodeHumi(raw);
 
     Filter_Push(&s_temp_filt, g_temp_now);
     Filter_Push(&s_humi_filt, g_humi_now);

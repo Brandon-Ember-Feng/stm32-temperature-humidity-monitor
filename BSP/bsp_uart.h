@@ -29,6 +29,9 @@ void BSP_Uart2_RxPoll(void);
  * 缓冲被丢弃时能连游标一起复位（见 BSP_Uart2_RxReset）。 */
 uint16_t BSP_Uart2_RxLen(void);             /* 缓冲里已有多少字节 */
 char     BSP_Uart2_RxAt(uint16_t idx);      /* 取第 idx 个字节（越界安全返回 '\0'） */
+/* 只读的缓冲首地址：给「整段扫描关键词」提供 O(n) 的访问方式（逐字节调 RxAt 是 O(n²)）。
+ * 返回 const 指针 —— 调用方只能读，写入仍然只发生在接收中断里。 */
+const char *BSP_Uart2_RxBuf(void);
 uint16_t BSP_Uart2_ScanPos(void);           /* 协议层扫描游标 */
 void     BSP_Uart2_ScanMove(uint16_t pos);  /* 移动扫描游标 */
 void     BSP_Uart2_RxReset(void);           /* 缓冲 + 游标 一起清空 */
