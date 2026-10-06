@@ -8,8 +8,9 @@
 **纯寄存器裸机开发，不依赖 HAL 库**，所有外设（GPIO / 定时器 / 串口 / SPI / 软件 I2C）均由直接读写寄存器实现。
 
 - 主控：STM32F103C8T6（Cortex-M3），主频 64 MHz
-- 固件体积：Flash **17.0 KB**、RAM **1.9 KB**（`text 17400 / data 8 / bss 1920`）
-- 代码规模：`Src/main.c` 3365 行（含大量原理注释）
+- 固件体积：Flash **18.0 KB**、RAM **1.9 KB**（`text 18444 / data 16 / bss 1920`）
+- 代码规模：4 层 21 个 `.c` 文件，按 `Core / Drivers / BSP / Util` 分层（见第 6 节）
+- 构建方式：`make` 一条命令，不依赖 IDE；架构约束在编译前自动校验
 
 ![实物运行照片](docs/images/hardware-03-run-status.png)
 
@@ -113,25 +114,58 @@
 
 ### 3.3 编译
 
-#### 方式 A：STM32CubeIDE（推荐初学者）
+#### 方式 A：命令行 `make`（推荐，只需一条命令）
 
-1. 打开 STM32CubeIDE → `File → Import → Existing Projects into Workspace`
+```bash
+make                      # 编译 + 链接，产物在 build/
+```
+
+工具链不在 `PATH` 里也没关系，用变量传进去即可（CubeIDE 自带的工具链就能用）：
+
+```bash
+make TOOLCHAIN="C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/\
+com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin"
+```
+
+**注意：每个 `.c` 编译之前都会自动跑一次架构校验**（见 6.2），违反分层约束就编译不过。
+
+| 目标 | 作用 |
+|---|---|
+| `make` / `make all` | 编译 + 链接 |
+| `make check-layering` | 单独跑分层架构校验 |
+| `make size` | 打印各段（.text/.rodata/.data/.bss…）占用明细 |
+| `make flash` | 用 `STM32_Programmer_CLI` 烧录（需装 STM32CubeProgrammer） |
+| `make clean` | 删除 `build/` |
+
+产物：
+
+| 文件 | 用途 |
+|---|---|
+| `build/temp-monitor.elf` | 带调试信息，SWD 下载 / 调试用 |
+| `build/temp-monitor.hex` | ST-Link 烧录用 |
+| `build/temp-monitor.bin` | 裸二进制 |
+| `build/temp-monitor.map` | 段与符号分布，排查体积用 |
+
+#### 方式 B：STM32CubeIDE
+
+1. `File → Import → Existing Projects into Workspace`
 2. 选择本仓库目录，导入后直接 `Build`
 3. 点击 `Run / Debug` 即可通过 ST-Link 烧录
 
-#### 方式 B：命令行（arm-none-eabi-gcc）
+> 仓库里的 `.cproject` 已经按四层配好源码目录与头文件路径
+> （`BSP / Util / Drivers / Core`），导入后不需要手工补 include。
 
-需先安装 [GNU Arm Embedded Toolchain](https://developer.arm.com/downloads/-/gnu-rm) 并加入 `PATH`：
+#### 方式 C：手工调用 arm-none-eabi-gcc（理解编译链接过程用）
+
+需先安装 [GNU Arm Embedded Toolchain](https://developer.arm.com/downloads/-/gnu-rm)：
 
 ```bash
-# 编译（Cortex-M3、无 HAL、-Wall -Wextra 零警告）
+# 编译单个 .c（Cortex-M3、无 HAL、-Wall -Wextra 零警告）
 arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -std=c11 -Wall -Wextra -O1 -g \
   -ffunction-sections -fdata-sections -DSTM32F103xB \
-  -c Src/main.c      -o main.o
-arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -std=c11 -O1 -g \
-  -c Src/syscalls.c  -o syscalls.o
-arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb -std=c11 -O1 -g \
-  -c Src/sysmem.c    -o sysmem.o
+  -IBSP -IUtil -IDrivers -ICore \
+  -c Core/main.c -o main.o          # 其余 .c 同样处理
+
 arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb \
   -c Startup/startup_stm32f103c8tx.s -o startup.o
 
@@ -140,7 +174,7 @@ arm-none-eabi-gcc -mcpu=cortex-m3 -mthumb \
   -T STM32F103C8TX_FLASH.ld \
   -Wl,-Map=fw.map -Wl,--gc-sections \
   -specs=nano.specs -specs=nosys.specs \
-  main.o syscalls.o sysmem.o startup.o -o fw.elf
+  *.o -o fw.elf
 
 # 生成烧录用 hex
 arm-none-eabi-objcopy -O ihex fw.elf fw.hex
@@ -152,9 +186,23 @@ arm-none-eabi-objcopy -O ihex fw.elf fw.hex
 ### 3.4 烧录
 
 ```bash
-# STM32CubeProgrammer CLI（ST-Link）
-STM32_Programmer_CLI -c port=SWD -w fw.hex -v -rst
+# 方式一：make（内部就是下面两条命令）
+make flash
+# 若 STM32_Programmer_CLI 不在 PATH 上，直接给完整路径：
+make flash PROGRAMMER="C:/Program Files/STMicroelectronics/STM32Cube/STM32CubeProgrammer/bin/STM32_Programmer_CLI.exe"
+
+# 方式二：直接用 STM32CubeProgrammer CLI
+STM32_Programmer_CLI.exe -c "port=SWD mode=UR reset=HWrst freq=1000" \
+                         -w build/temp-monitor.hex -v
+
+# ⚠️ 烧完必须再显式复位一次，否则芯片停在 halt 状态，串口一条数据都不会有
+STM32_Programmer_CLI.exe -c "port=SWD mode=UR reset=HWrst freq=1000"
 ```
+
+两个实测踩过的点：
+
+- **必须用 `mode=UR`（under reset）**，不能用默认的 `mode=hotplug` —— hotplug 模式下无法擦除 Flash，会报 `failed to erase memory`。
+- **烧录后要单独发一次复位命令**。实测：烧完直接开串口监听 = 收到 0 字节；补一条复位命令后 = 正常收到 400+ 字节的自检日志。
 
 烧录器只接 **SWDIO / SWCLK / GND** 三根线即可（不要同时接 3.3 V，避免两个电源并联）。
 
@@ -328,63 +376,144 @@ T=31.6C H=45.0% #106 A=1
 
 ## 6. 项目结构
 
+代码按 **`Core → Drivers → BSP → Util`** 四层组织，21 个 `.c` 文件。分层不是为了"好看"，
+而是为了让**上层代码不依赖具体硬件** —— 这是后面能做单元测试、能换芯片的前提（见 6.2）。
+
 ```
 温湿度监测仪/
 ├── README.md                     本文件
 ├── LICENSE                       MIT 许可证
+├── Makefile                      命令行构建（all / size / flash / check-layering / clean）
 ├── STM32F103C8TX_FLASH.ld        链接脚本（Flash/RAM 布局）
-├── docs/
-│   └── images/                   实物照片（见 5.6 节）
-├── Src/
-│   ├── main.c                    全部应用代码（3365 行，含详细原理注释）
-│   ├── syscalls.c                系统调用桩（newlib 依赖）
-│   └── sysmem.c                  堆内存管理桩
-└── Startup/
-    └── startup_stm32f103c8tx.s   启动文件（向量表 + 复位入口）
+├── .cproject / .project          STM32CubeIDE 工程（已指向四层目录，导入即可编译）
+│
+├── Core/                    ★ 第 4 层  应用逻辑，一行寄存器都不碰
+│   ├── main.c                    上电整套自检流程 + 主循环调度
+│   ├── app.c / app.h             数据模型：解析原始字节、滑动平均、极值、报警判定
+│   ├── ui_pages.c / ui_pages.h   五个 OLED 画面 + 按键切换
+│   └── syscalls.c / sysmem.c     newlib 桩函数
+├── Drivers/                 ★ 第 3 层  器件驱动，只依赖 BSP 提供的物理层
+│   ├── dht11.c / .h              DHT11 单总线协议、位解码、校验和
+│   ├── ssd1306.c / .h            OLED 控制器指令与显存写入
+│   ├── font8x16.c / .h           8×16 点阵字库
+│   ├── w25q64.c / .h             SPI Flash 指令集
+│   ├── hist_store.c / .h         历史记录：双扇区乒乓 + 顺序追加 + 索引换算
+│   ├── esp8266_at.c / .h         AT 指令序列、应答解析、断线重连
+│   ├── key.c / .h                按键扫描：消抖 + 长短按
+│   └── beep.c / .h               蜂鸣器
+├── BSP/                     ★ 第 2 层  板级支持包，全工程唯一允许读写寄存器的地方
+│   ├── bsp_reg.h                 全部寄存器地址与位定义（只有这一处）
+│   ├── bsp_rcc.c / .h            时钟树：HSI /2 → PLL ×16 → 64 MHz
+│   ├── bsp_time.c / .h           SysTick 微秒延时 + TIM2 1 ms 系统时基
+│   ├── bsp_gpio.c / .h           GPIO 配置、LED 与按键引脚
+│   ├── bsp_onewire.c / .h        单总线电平时序（DHT11 的物理层）
+│   ├── bsp_soft_i2c.c / .h       软件 I2C（OLED 的物理层）
+│   ├── bsp_spi.c / .h            SPI1（W25Q64 的物理层）
+│   ├── bsp_uart.c / .h           USART1 调试口 + USART2 中断收发
+│   └── bsp_cpu.h                 内核级原语：关 / 开全局中断
+├── Util/                    ★ 第 1 层  纯算法，不包含任何硬件头文件
+│   ├── fixed_str.c / .h          定点格式化（不用 sprintf，省 Flash）
+│   └── filter.c / .h             滑动平均滤波器
+│
+├── Startup/
+│   └── startup_stm32f103c8tx.s   启动文件（向量表 + 复位入口）
+├── tools/
+│   └── check_layering.py         分层架构自动校验（三条硬性约束）
+└── docs/
+    └── images/                   实物照片（见 5.6 节）
 ```
 
-`main.c` 按章节组织，便于阅读：
+### 6.1 模块与原章节的对应关系
 
-| 章节 | 内容 |
-|---|---|
-| 1–3 | 寄存器地址定义、系统时钟（HSI/PLL→64 MHz）、SysTick 微秒延时 |
-| 4–5 | 软件 I2C 与 SSD1306 OLED 驱动（含 8×16 字库取模原理） |
-| 6–8 | TIM2 1 ms 时基、按键扫描（消抖 + 长短按）、DHT11 单总线 |
-| 9–11 | SPI1、W25Q64 驱动、历史记录读写（双扇区乒乓） |
-| 12–14 | 蜂鸣器、五个显示画面、USART1 调试串口 |
-| 15 | ESP-01S 驱动（USART2 + AT 指令 + 收包中断 + 断线重连） |
-| 16 | 主函数与状态机 |
+最初的版本是**一个 3373 行的 `main.c`**，内部已经按 16 个章节分成段落 —— 也就是说
+**模块边界在逻辑上早就存在**。这次重构做的是"把边界显式化"，不是重新设计，
+所以每个模块的行为都能和原来逐段对上：
+
+| 原 `main.c` 章节 | 内容 | 现在的位置 |
+|---|---|---|
+| 1–3 | 寄存器地址定义、系统时钟、SysTick 微秒延时 | `BSP/bsp_reg.h`、`bsp_rcc.c`、`bsp_time.c` |
+| 4 | 软件 I2C 时序 | `BSP/bsp_soft_i2c.c` |
+| 5 | SSD1306 驱动 + 8×16 字库 | `Drivers/ssd1306.c`、`font8x16.c` |
+| 6 | TIM2 1 ms 时基 | `BSP/bsp_time.c` |
+| 7 | 按键扫描（消抖 + 长短按） | `Drivers/key.c` |
+| 8 | DHT11 单总线协议 | `Drivers/dht11.c`（线级时序在 `BSP/bsp_onewire.c`） |
+| 9 | SPI1 | `BSP/bsp_spi.c` |
+| 10 | W25Q64 驱动 | `Drivers/w25q64.c` |
+| 11 | 历史记录（双扇区乒乓） | `Drivers/hist_store.c` |
+| 12 | 蜂鸣器 | `Drivers/beep.c` |
+| 13 | 五个显示画面 | `Core/ui_pages.c` |
+| 14 | USART1 调试串口 | `BSP/bsp_uart.c` |
+| 15 | ESP-01S 驱动（AT 指令） | `Drivers/esp8266_at.c`（收发在 `BSP/bsp_uart.c`） |
+| 16 | 主函数与状态机 | `Core/main.c`、`Core/app.c` |
+| — | 定点格式化、滑动平均（原散在各处） | `Util/fixed_str.c`、`Util/filter.c` |
+
+> 重构的等价性做过工具校验：把访问函数按语义反向还原后逐函数比对，
+> **106 个函数与重构前逐字一致**，仅 5 个函数因"接口收口"被有意改写，新增 17 个访问接口。
+
+### 6.2 三条硬性约束（构建时自动强制）
+
+| # | 约束 | 为什么 |
+|---|---|---|
+| **1** | **依赖单向**：`Core → Drivers → BSP → Util`，禁止反向 | 反向依赖会让改动"牵一发动全身"，也让模块无法单独测试 |
+| **2** | **寄存器隔离**：所有寄存器读写只允许出现在 `BSP/` | 上层不含任何硬件细节，把逻辑搬到 PC 上编译、跑单元测试才有可能 |
+| **3** | **接口收敛**：`BSP/Util/Drivers` 的内部状态一律 `static`，跨模块只走 `.h` 里的访问函数 | "谁能改这个状态"永远只有一个答案，出问题时排查面从全工程缩到一个文件 |
+
+这三条不是写在文档里靠自觉，而是由 `tools/check_layering.py` **在每次编译前自动检查**：
+
+```bash
+$ make check-layering
+======================================================================
+分层架构校验   共检查 43 个文件
+======================================================================
+  规则1 依赖单向   Core -> Drivers -> BSP -> Util   ✔
+  规则2 寄存器隔离 寄存器访问仅存在于 BSP/ 层        ✔
+  规则3 接口收敛   BSP/Util/Drivers 内部状态全 static ✔
+
+结论：架构约束全部满足 ✔
+```
+
+一旦有人（包括我自己）在 `Drivers/` 里直接写了 `GPIOA_CRL`，或者图省事加了个
+非 `static` 的全局变量，**编译会直接失败**并指出文件名和行号。
+
+> 由约束 3 带来的一处实际改进：原本 `Core/main.c` 会直接给驱动内部的
+> `g_spi_ok` 赋值、给 `g_dht_ok_cnt` 做自增。现在这些动作全在驱动内部，
+> 上层只能通过 `W25_IsOk()` / `DHT_OkCount()` 读结论 —— 驱动内部怎么记账，
+> 上层既不需要知道，也没有能力改坏。
 
 ---
 
 ## 7. 几个值得说明的技术决策
 
-| 决策 | 原因 |
-|---|---|
-| **不用 HAL，直接写寄存器** | 每一行都对应参考手册的一个 bit，便于理解外设真实工作方式；固件仅 17 KB |
-| **用 HSI 内部时钟而非外部晶振** | HSI 8 MHz / 2 → PLL ×16 = 64 MHz，不依赖外部晶振是否起振，程序更"皮实" |
-| **时基用 TIM2 硬件中断，不用延时累加** | 软件延时的每次调用都有指令开销，累加一万次误差明显；定时器中断与程序在做什么无关 |
-| **Flash 用双扇区乒乓写入** | Flash 只能把 1 写成 0，改写前必须整扇区擦除。两个扇区轮流用，每个扇区"用满一次"才擦一次，寿命消耗极慢 |
-| **USART2 接收用中断而非轮询** | 115200 下字节间隔仅 87 µs，而主循环每 1 ms 才轮询一次，**慢十几倍**会导致溢出丢字节，只能收到每帧第一个字符 |
-| **ESP 自建热点而非连路由器** | 不依赖外部网络，演示时随手就能连；缺点是热点无外网，手机/电脑会提示"无法访问互联网" |
+> 列出「代价」是有意的 —— 任何设计都是取舍，说不出代价的方案通常是因为还没想清楚。
+
+| 决策 | 理由 | 代价 |
+|---|---|---|
+| **不用 HAL，直接写寄存器** | 每一行都对应参考手册的一个 bit，能看清外设真实工作方式 | 换芯片要重写 BSP 层；没有 HAL 提供的容错 |
+| **代码分四层，寄存器只在 BSP** | 上层不含硬件细节，逻辑能在 PC 上编译并做单元测试；换芯片只改 BSP | 多了一层函数跳转（实测约 +1 KB Flash），写起来比"一个文件写完"啰嗦 |
+| **用 HSI 内部时钟而非外部晶振** | 不依赖外部晶振是否起振，程序更"皮实" | 精度约 ±1%，不适合长时间计时（本项目只做相对计时，够用） |
+| **时基用 TIM2 硬件中断，不用延时累加** | 软件延时的每次调用都有指令开销，累加一万次误差明显 | 占用一个定时器；中断里必须保持极短，否则影响单总线时序 |
+| **Flash 用双扇区乒乓写入** | Flash 只能把 1 写成 0，改写前必须整扇区擦除。两扇区轮流用，寿命消耗极慢 | 有效容量减半，逻辑复杂度上升（要处理掉电、对账、跨扇区翻转） |
+| **USART2 接收用中断而非轮询** | 115200 下字节间隔仅 87 µs，主循环 1 ms 才轮询一次，**慢十几倍**会溢出丢字节 | 多了一个中断服务函数；缓冲与游标的并发访问要小心（清缓冲时必须关中断） |
+| **ESP 自建热点而非连路由器** | 不依赖外部网络和现场 WiFi，演示时随手就能连 | 热点无外网，手机/电脑会提示"无法访问互联网" |
+| **不用 `sprintf` / 浮点，手写定点格式化** | Flash 只有 64 KB，`sprintf` 会拖进整个格式化引擎；浮点还要软件模拟 | 只能按固定格式输出，格式改了要改代码（体现为 `Util/fixed_str.c`） |
 
 ---
 
 ## 8. 可配置参数
 
-集中在 `Src/main.c` 中，修改后重新编译即可：
+分散在对应模块的头文件里，改完 `make` 重新编译即可：
 
-| 宏 | 默认值 | 含义 |
-|---|---|---|
-| `TEMP_ALARM_X10` | `300` | 温度报警阈值 30.0 °C（×10 存储） |
-| `HUMI_ALARM_X10` | `800` | 湿度报警阈值 80.0 % |
-| `FILTER_N` | `5` | 滑动平均的采样个数 |
-| `BEEP_ACTIVE_HIGH` | `0` | 蜂鸣器触发极性：`0`=低电平触发，`1`=高电平触发 |
-| `HIST_PER_PAGE` | `3` | 历史画面每页显示条数 |
-| `ESP_AP_SSID` / `ESP_AP_PWD` | `ESP_TEMP` / `12345678` | 热点名称与密码 |
-| `ESP_TCP_PORT` | `8080` | TCP 服务器端口 |
-| `ESP_LOG_FRAMES` | `0` | 改为 `1` 可在串口打印每帧 AT 往返（调试用，会很吵） |
-| `I2C_SWAP_DIAG` | `0` | 改为 `1` 开启 SCL/SDA 接反判别（排障用） |
+| 宏 | 位置 | 默认值 | 含义 |
+|---|---|---|---|
+| `TEMP_ALARM_X10` | `Core/app.h` | `300` | 温度报警阈值 30.0 °C（×10 存储） |
+| `HUMI_ALARM_X10` | `Core/app.h` | `800` | 湿度报警阈值 80.0 % |
+| `FILTER_N` | `Util/filter.h` | `5` | 滑动平均的采样个数 |
+| `BEEP_ACTIVE_HIGH` | `Drivers/beep.h` | `0` | 蜂鸣器触发极性：`0`=低电平触发，`1`=高电平触发 |
+| `HIST_PER_PAGE` | `Core/ui_pages.h` | `3` | 历史画面每页显示条数 |
+| `ESP_AP_SSID` / `ESP_AP_PWD` | `Drivers/esp8266_at.h` | `ESP_TEMP` / `12345678` | 热点名称与密码 |
+| `ESP_TCP_PORT` | `Drivers/esp8266_at.h` | `8080` | TCP 服务器端口 |
+| `ESP_LOG_FRAMES` | `Drivers/esp8266_at.h` | `0` | 改为 `1` 可在串口打印每帧 AT 往返（调试用，会很吵） |
+| `I2C_SWAP_DIAG` | `BSP/bsp_gpio.h` | `0` | 改为 `1` 开启 SCL/SDA 接反判别（排障用） |
 
 ---
 
@@ -401,6 +530,8 @@ T=31.6C H=45.0% #106 A=1
 | 蜂鸣器从来不响 | **VCC/GND 接反**（反接通常不烧，只是不响）；或 IO 未接到 PB5 |
 | 蜂鸣器一直长鸣 | 触发极性配反，把 `BEEP_ACTIVE_HIGH` 改为 `1` |
 | 按键卡在历史画面出不来 | 该画面短按是翻页，需**长按 1 秒**返回 |
+| `make` 报"架构违规" | 在 `Drivers/` 或 `Core/` 里直接写了寄存器，或加了非 `static` 全局变量；按脚本输出的 `文件:行号` 改 |
+| 编译报 `undefined reference to g_xxx` | 说明有模块直接引用了别的模块的内部变量 —— 应改为调用该模块 `.h` 里的访问函数 |
 
 ---
 
@@ -410,6 +541,9 @@ T=31.6C H=45.0% #106 A=1
 |---|---|
 | 主控 | STM32F103C8T6，64 MHz |
 | 编译器 | arm-none-eabi-gcc 14.3（`-Wall -Wextra` 零警告） |
+| 固件体积 | `text 18444 / data 16 / bss 1920`（Flash 18.0 KB / RAM 1.9 KB） |
+| 分层等价性校验 | 106 个函数与重构前逐字一致；5 处有意改写；新增 17 个访问接口 |
+| 架构约束校验 | `make check-layering`：43 个文件，3 条规则全部通过 |
 | ESP-01S 固件 | AT 1.1.0.0（May 11 2016）/ SDK 1.5.4，波特率 115200 |
 | OLED | SSD1306，I2C 地址 `0x78` |
 | Flash | W25Q64，`JEDEC = 0xEF4017` |
